@@ -1,55 +1,51 @@
+import tensorflow as tf
+
+import cv2
 import os
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
-    Input, Conv2D, MaxPooling2D, Flatten,
-    Dense, Dropout, BatchNormalization
-)
-from tensorflow.keras.regularizers import l2
-from tensorflow.keras import backend as K
-import os
 
-from preprocess import preprocess_signature
-import random
-from itertools import combinations
+SIZE = 128
 
-IMG_HEIGHT = 155
-IMG_WIDTH = 220
-IMG_CHANNELS = 1
+def build_embedding_model(input_shape):
+    model = tf.keras.Sequential([
+        tf.keras.layers.Conv2D(64, (3, 3), activation='relu', input_shape=input_shape),
+        tf.keras.layers.MaxPooling2D(2, 2),
 
+        tf.keras.layers.Conv2D(128, (3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D(2, 2),
 
-def build_signature_encoder(input_shape):
-    inputs = Input(shape=input_shape)
+        tf.keras.layers.Conv2D(256, (3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D(4, 4),
 
-    x = Conv2D(64, (10, 10), activation='relu', kernel_regularizer=l2(0.01))(inputs)
-    x = BatchNormalization()(x)
-    x = MaxPooling2D()(x)
+        tf.keras.layers.Conv2D(512, (3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D(4, 4),
 
-    x = Conv2D(128, (7, 7), activation='relu', kernel_regularizer=l2(0.01))(x)
-    x = BatchNormalization()(x)
-    x = MaxPooling2D()(x)
+        tf.keras.layers.Flatten(),
+    ], name='embedding_model')
+    return model
 
-    x = Conv2D(128, (4, 4), activation='relu', kernel_regularizer=l2(0.01))(x)
-    x = BatchNormalization()(x)
-    x = MaxPooling2D()(x)
+def load_signature_images(genuine_path, forgery_path, target_size=(128, 128)):
+    def load_images(path):
+        images = []
+        for image_file in os.listdir(path):
+            img = cv2.imread(os.path.join(path, image_file), cv2.IMREAD_GRAYSCALE)
+            if img is not None:
+                images.append(cv2.resize(img, target_size))
+        return np.array(images)
+    return load_images(genuine_path), load_images(forgery_path)
 
-    x = Conv2D(256, (4, 4), activation='relu', kernel_regularizer=l2(0.01))(x)
-    x = BatchNormalization()(x)
+# Create Pairs for Siamese Training
+def create_pairs(genuine, forged):
+    pairs, labels = [], []
+    for i in range(min(len(genuine), len(forged))):
+        pairs.append([genuine[i], genuine[(i + 1) % len(genuine)]])  # Genuine pair
+        labels.append(1)
+        pairs.append([genuine[i], forged[i]])  # Forged pair
+        labels.append(0)
+    return np.array(pairs), np.array(labels)
 
-    x = Flatten()(x)
-    x = Dropout(0.5)(x)
-    x = Dense(1024)(x)
-
-    return Model(inputs, x)
-
-
-def euclidean_distance(vectors):
-    x, y = vectors
-    sum_square = K.sum(K.square(x - y), axis=1, keepdims=True)
-    return K.sqrt(K.maximum(sum_square, K.epsilon()))
-
-def load_signature_pairs(dataset_path, num_users=55, max_genuine_per_user=5):
+'''
+def load_signature_pairs(dataset_path, num_users=55, max_genuine_per_user=10):
     org_path = os.path.join(dataset_path, 'signatures', 'full_org')
 
     genuine_dict = {}
@@ -82,7 +78,7 @@ def load_signature_pairs(dataset_path, num_users=55, max_genuine_per_user=5):
         # Generar pares negativos contra otros usuarios
         other_users = [u for u in usuarios if u != user]
         for img_path1 in genuines:
-            for _ in range(2):  # 2 negativos por cada genuina (ajustable)
+            for _ in range(3):  # 2 negativos por cada genuina (ajustable)
                 neg_user = random.choice(other_users)
                 neg_genuine = sorted(genuine_dict[neg_user])[:max_genuine_per_user]
                 img_path2 = random.choice(neg_genuine)
@@ -98,4 +94,4 @@ def load_signature_pairs(dataset_path, num_users=55, max_genuine_per_user=5):
     y = np.array(y, dtype=np.float32)
 
     return X1, X2, y
-
+'''

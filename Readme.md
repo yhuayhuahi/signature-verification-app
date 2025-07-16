@@ -54,3 +54,10 @@ print(f"✔️ Carpeta descomprimida en: {extract_path}")
 
 %cd /content/verificador_firmas/modelo_siamesa
 !python train_model.py
+
+ 
+function ClickConnect(){
+  console.log("Clickeando para evitar timeout");
+  document.querySelector("colab-connect-button").click();
+}
+setInterval(ClickConnect, 300000)

@@ -3,58 +3,84 @@ import numpy as np
 from PIL import Image
 import io
 
-def preprocess_signature(image_input, target_height=155, target_width=220):
+def _is_clean_scan(gray):
+    """Heurística rápida: ¿el fondo es casi blanco y homogéneo?"""
+    h, w = gray.shape
+    # Proporción de píxeles > 240 (muy claros)
+    white_ratio = np.sum(gray > 240) / (h * w)
+    return white_ratio > 0.70   # 70 % del fondo muy claro ⇒ escaneada
+
+def _deskew_and_crop(gray):
+    """Detecta contorno dominante (hoja/firma) y hace warp + crop"""
+    # 1. Suavizado y Canny
+    blur = cv2.GaussianBlur(gray, (5,5), 0)
+    edges = cv2.Canny(blur, 50, 150)
+    # 2. Buscar contornos grandes
+    cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return gray      # fallback
+    # contorno con área máxima
+    c = max(cnts, key=cv2.contourArea)
+    x,y,w,h = cv2.boundingRect(c)
+    cropped = gray[y:y+h, x:x+w]
+    return cropped
+
+def preprocess_signature_simple(image_input, size=128):
     """
-    Preprocesa una imagen de firma:
-    - Convierte a escala de grises
-    - Aplica binarización adaptativa
-    - Recorta la región de la firma
-    - Redimensiona manteniendo proporción
-    - Centra la firma en un lienzo blanco de tamaño fijo
+    Pre‑procesamiento robusto:
+    - Detecta tipo (scan vs foto)
+    - Aplica pipeline extra sólo para fotos
+    - Devuelve tensor (H, W, 1) float32 in [0,1]
     
     Args:
         image_input: Puede ser una ruta de archivo (str) o un stream de archivo
+        size: Tamaño objetivo (por defecto 128, como en test_model4.py)
     """
+    # --- 1. leer imagen en escala de grises ----------------------------
     if isinstance(image_input, str):
-        # Es una ruta de archivo
-        img = cv2.imread(image_input, cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            raise ValueError(f"No se pudo cargar la imagen: {image_input}")
+        gray = cv2.imread(image_input, cv2.IMREAD_GRAYSCALE)
+        if gray is None:
+            raise ValueError(f"No se pudo cargar {image_input}")
+    else:  # stream
+        image_input.seek(0)
+        pil = Image.open(image_input).convert('L')
+        gray = np.array(pil)
+
+    # --- 2. decidir si es foto o scan ----------------------------------
+    if _is_clean_scan(gray):
+        processed = gray  # Escaneada -> nada extra
     else:
-        # Es un stream de archivo
-        try:
-            # Leer el stream y convertir a array numpy
-            image_input.seek(0)  # Asegurar que estamos al inicio del stream
-            pil_image = Image.open(image_input)
-            # Convertir a escala de grises si es necesario
-            if pil_image.mode != 'L':
-                pil_image = pil_image.convert('L')
-            img = np.array(pil_image)
-        except Exception as e:
-            raise ValueError(f"Error procesando el stream de imagen: {e}")
+        # ---- pipeline extra para foto ----
+        # a) Reducción opcional
+        if max(gray.shape) > 1024:
+            scale = 1024 / max(gray.shape)
+            gray = cv2.resize(gray, None, fx=scale, fy=scale,
+                              interpolation=cv2.INTER_AREA)
+        # b) Deskew + crop
+        gray = _deskew_and_crop(gray)
+        # c) Denoise
+        gray = cv2.medianBlur(gray, 3)
+        # d) CLAHE (mejora contraste)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        gray = clahe.apply(gray)
+        # e) Binarizar opcional (adaptativo)
+        gray = cv2.adaptiveThreshold(gray, 255,
+                                     cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                     cv2.THRESH_BINARY, 17, 15)
+        processed = gray
 
-    # Binarización adaptativa para mejorar detección del trazo
-    img_bin = cv2.adaptiveThreshold(
-        img, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        blockSize=19,
-        C=8
-    )
+    # --- 3. resize + normalizar ----------------------------------------
+    processed = cv2.resize(processed, (size, size), interpolation=cv2.INTER_AREA)
+    img = processed.astype('float32') / 255.0
+    return img[..., None]          # shape (size,size,1)
 
-    coords = cv2.findNonZero(img_bin)
-    x, y, w, h = cv2.boundingRect(coords)
-    cropped = img_bin[y:y+h, x:x+w]
-
-    scale = min(target_width / w, target_height / h)
-    new_w, new_h = int(w * scale), int(h * scale)
-    resized = cv2.resize(cropped, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    canvas = np.ones((target_height, target_width), dtype='uint8') * 255
-    x_offset = (target_width - new_w) // 2
-    y_offset = (target_height - new_h) // 2
-    canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized
-
-    canvas = canvas.astype('float32') / 255.0
-    canvas = np.expand_dims(canvas, axis=-1)
-    return canvas
+def preprocess_signature(image_input, size=128):
+    """
+    Función de compatibilidad que usa el mismo preprocesamiento robusto.
+    Mantiene el nombre original para backward compatibility.
+    
+    Args:
+        image_input: Puede ser una ruta de archivo (str) o un stream de archivo
+        size: Tamaño objetivo (por defecto 128)
+    """
+    return preprocess_signature_simple(image_input, size)

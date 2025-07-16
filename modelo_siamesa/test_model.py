@@ -1,33 +1,58 @@
-
+import cv2
 import numpy as np
-from tensorflow.keras.models import load_model
-from preprocess import preprocess_signature
-from utils import euclidean_distance
-import sys
+import tensorflow as tf
+import matplotlib.pyplot as plt
 
-# Ruta al modelo entrenado
-MODEL_PATH = "modelo_siamesa.h5"
+# Define the size of the input images
+from utils import SIZE
 
-# Rutas a las dos imágenes que quieres comparar
-IMG_1_PATH = "../dataset/signatures/full_org/original_25_1.png"
-IMG_2_PATH = "../dataset/signatures/full_org/original_1_1.png"
+from keras.config import enable_unsafe_deserialization
+enable_unsafe_deserialization()
 
-# Cargar el modelo con las funciones personalizadas
-model = load_model(MODEL_PATH, custom_objects={"euclidean_distance": euclidean_distance})
+# Load the trained model
+model = tf.keras.models.load_model("siamese_signature_model.keras")
 
-# Preprocesar imágenes
-img1 = preprocess_signature(IMG_1_PATH)
-img2 = preprocess_signature(IMG_2_PATH)
+# Function to preprocess a single image (resize and normalize)
+def preprocess_single_image(image_path, target_size=(128, 128)):
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    img = cv2.resize(img, target_size)
+    img = img.astype('float32') / 255.0
+    return np.expand_dims(img, axis=-1)  # Add channel dimension
 
-# Expandir a batch size 1
-img1 = np.expand_dims(img1, axis=0)
-img2 = np.expand_dims(img2, axis=0)
+# Function to verify if two signatures match
+def verify_signature(signature1_path, signature2_path):
+    # Preprocess both images
+    img1 = preprocess_single_image(signature1_path)
+    img2 = preprocess_single_image(signature2_path)
+    
+    # Display images using matplotlib
+    original = cv2.imread(signature1_path)
+    forged = cv2.imread(signature2_path)
+    
+    plt.figure(figsize=(10, 5))
+    plt.subplot(1, 2, 1)
+    plt.imshow(original, cmap='gray')
+    plt.title("Original Signature")
+    plt.axis('off')
+    
+    plt.subplot(1, 2, 2)
+    plt.imshow(forged, cmap='gray')
+    plt.title("Compared Signature")
+    plt.axis('off')
+    
+    plt.show()
+    
+    # Make prediction using the Siamese network
+    prediction = model.predict([np.expand_dims(img1, axis=0), np.expand_dims(img2, axis=0)])
+    
+    # If the output is closer to 1, it is a genuine match, otherwise, it is a forged signature
+    result = "Genuine" if prediction > 0.8 else "Forged"
+    print(f"The signature comparison result is: {result}")
+    print(f"Similarity score: {prediction[0][0]}")
 
-# Predecir similitud
-similarity = model.predict([img1, img2])[0][0]
+# Paths to the test signature images
+signature1_path = "../dataset/signatures/full_org/original_10_1.png"
+signature2_path = "../dataset/signatures/full_forg/forgeries_10_1.png"
 
-print(f"🧠 Similitud predicha: {similarity:.4f}")
-if similarity > 0.5: # 
-    print("✅ Las firmas parecen del MISMO autor.")
-else:
-    print("❌ Las firmas parecen de AUTORES DISTINTOS.")
+# Run the signature verification
+verify_signature(signature1_path, signature2_path)
